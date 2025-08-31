@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import subprocess
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Tuple
@@ -90,3 +91,92 @@ class SSHClient:
             return 124, "Timeout"
         except Exception as e:
             return 1, f"Error: {e}"
+
+    async def archive_dir(self, remote_dir: str) -> Tuple[int, bytes]:
+        """Create a tar.gz of remote_dir on the remote host and stream it back.
+
+        Returns (exit_code, data_bytes_or_error_bytes)
+        """
+        c = self.cfg
+        parent = os.path.dirname(remote_dir.rstrip("/")) or "."
+        base = os.path.basename(remote_dir.rstrip("/")) or remote_dir
+        # Use tar to write gzipped archive to stdout
+        remote_cmd = (
+            f"tar -C {shlex.quote(parent)} -czf - {shlex.quote(base)}"
+        )
+
+        argv = [
+            "ssh",
+            "-i", str(c.key_path),
+            "-p", str(c.port),
+            "-o", "BatchMode=yes",
+            "-o", f"StrictHostKeyChecking={c.strict_mode}",
+        ]
+        if c.known_hosts_path:
+            argv += ["-o", f"UserKnownHostsFile={c.known_hosts_path}"]
+        argv += [f"{c.user}@{c.host}", "--", remote_cmd]
+
+        log.info("SSH archive: %s", argv)
+        try:
+            proc = await asyncio.to_thread(
+                subprocess.run, argv, capture_output=True, text=False, timeout=c.timeout
+            )
+            # Always return stdout (archive bytes), even if return code != 0
+            # Many tar warnings still produce a usable archive on stdout.
+            return proc.returncode, proc.stdout
+        except subprocess.TimeoutExpired:
+            return 124, b"Timeout"
+        except Exception as e:
+            return 1, f"Error: {e}".encode()
+
+    async def download_artifact(self, glob_pattern: str, since_epoch: Optional[int] = None) -> Tuple[int, bytes, str | None]:
+        """Find latest matching file by glob on remote and stream it back.
+
+        Returns (exit_code, data_bytes_or_error_bytes, filename_or_none)
+        """
+        c = self.cfg
+        # Use shell to expand glob, list by mtime, pick newest, then pipe file bytes
+        if since_epoch is None:
+            remote_cmd = (
+                "set -e; "
+                f"f=$(ls -1t -- {glob_pattern} 2>/dev/null | head -n1 || true); "
+                "if [ -z \"$f\" ]; then echo 'No matching file' >&2; exit 2; fi; "
+                "printf '%s\\n' \"$f\" 1>&2; "
+                "cat -- \"$f\""
+            )
+        else:
+            remote_cmd = (
+                f"since={since_epoch}; "
+                # Iterate files matching the glob; choose the newest with mtime >= since
+                f"best=; best_ts=0; for f in {glob_pattern}; do [ -e \"$f\" ] || continue; "
+                "ts=$(stat -c %Y \"$f\" 2>/dev/null || stat -f %m \"$f\" 2>/dev/null || echo 0); "
+                "if [ \"$ts\" -ge \"$since\" ] && [ \"$ts\" -ge \"$best_ts\" ]; then best=\"$f\"; best_ts=\"$ts\"; fi; "
+                "done; if [ -z \"$best\" ]; then echo 'No matching file' >&2; exit 2; fi; "
+                "printf '%s\\n' \"$best\" 1>&2; cat -- \"$best\""
+            )
+
+        argv = [
+            "ssh",
+            "-i", str(c.key_path),
+            "-p", str(c.port),
+            "-o", "BatchMode=yes",
+            "-o", f"StrictHostKeyChecking={c.strict_mode}",
+        ]
+        if c.known_hosts_path:
+            argv += ["-o", f"UserKnownHostsFile={c.known_hosts_path}"]
+        argv += [f"{c.user}@{c.host}", "--", remote_cmd]
+
+        log.info("SSH fetch artifact: %s", argv)
+        try:
+            proc = await asyncio.to_thread(
+                subprocess.run, argv, capture_output=True, text=False, timeout=c.timeout
+            )
+            if proc.returncode == 0:
+                # Last line on stderr should be filename printed by remote_cmd
+                chosen = (proc.stderr or b"").splitlines()[-1].decode(errors="replace") if proc.stderr else None
+                return 0, proc.stdout, chosen
+            return proc.returncode, (proc.stderr or proc.stdout), None
+        except subprocess.TimeoutExpired:
+            return 124, b"Timeout", None
+        except Exception as e:
+            return 1, f"Error: {e}".encode(), None

@@ -1,5 +1,7 @@
 import logging
 from typing import Optional, List
+from datetime import datetime
+from pathlib import Path
 
 from telegram import Update, InlineKeyboardMarkup
 from telegram.ext import (
@@ -62,6 +64,25 @@ class BotApp:
             body = f"{head if i == 0 else '…'}\n```\n{escape_md_v2(part)}\n```"
             await target.reply_text(body, parse_mode="MarkdownV2")
 
+    async def _send_local_file(self, target, path: Path, caption: str) -> None:
+        """Send a local file in a version-agnostic way across PTB versions."""
+        needs_close = False
+        file_obj = None
+        try:
+            try:
+                from telegram import FSInputFile as _FSInputFile  # type: ignore
+                file_obj = _FSInputFile(str(path))
+            except Exception:
+                file_obj = open(path, "rb")
+                needs_close = True
+            await target.reply_document(document=file_obj, caption=caption)
+        finally:
+            if needs_close and file_obj is not None:
+                try:
+                    file_obj.close()
+                except Exception:
+                    pass
+
     # ---------- handlers
     async def start(self, update: Update, _: ContextTypes.DEFAULT_TYPE):
         if not self._can(update.effective_user.id):
@@ -102,11 +123,70 @@ class BotApp:
         if meta.manual:
             return await q.message.reply_text("✍️ Type a command (or /cancel):")
 
-        if not meta.exec:
-            return await q.message.reply_text("Command not configured.")
+        # Archive directory and send as a file
+        if getattr(meta, "archive", None):
+            remote_dir = meta.archive or ""
+            if not remote_dir:
+                return await q.message.reply_text("Archive path not configured.")
+            rc, data = await self.ssh.archive_dir(remote_dir)
+            # Even if tar returned non-zero (warnings), still try to send if we have bytes
+            if not data:
+                return await self._ship_output(q.message, rc, "Archive failed or empty output.")
 
-        rc, output = await self.ssh.exec(meta.exec)
-        await self._ship_output(q.message, rc, output)
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            key_safe = key.replace("/", "-")
+            filename = f"{key_safe}_{ts}.tar.gz"
+            out_path = Path(self.settings.RUNTIME_DIR) / filename
+            try:
+                out_path.write_bytes(data)  # type: ignore[arg-type]
+                await self._send_local_file(q.message, out_path, caption=f"📦 {filename}")
+            finally:
+                try:
+                    if out_path.exists():
+                        out_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            return
+
+        if meta.exec:
+            # Capture remote epoch to disambiguate artifacts created by this run
+            since_ts: int | None = None
+            try:
+                rc_t, out_t = await self.ssh.exec("date +%s")
+                if rc_t == 0:
+                    since_ts = int((out_t or "").strip())
+            except Exception:
+                since_ts = None
+
+            rc, output = await self.ssh.exec(meta.exec)
+            await self._ship_output(q.message, rc, output)
+
+            # If an artifact glob is configured, fetch and send the newest matching file
+            if getattr(meta, "artifact", None):
+                rc2, data2, chosen = await self.ssh.download_artifact(meta.artifact or "", since_epoch=since_ts)
+                if rc2 != 0:
+                    err_txt = (
+                        data2.decode(errors="replace") if isinstance(data2, (bytes, bytearray)) else str(data2)
+                    )
+                    await self._ship_output(q.message, rc2, err_txt)
+                    return
+                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                base = (Path(chosen).name if chosen else f"artifact_{ts}.bin")
+                key_safe = key.replace("/", "-")
+                filename = f"{key_safe}_{base}"
+                out_path = Path(self.settings.RUNTIME_DIR) / filename
+                try:
+                    out_path.write_bytes(data2)  # type: ignore[arg-type]
+                    await self._send_local_file(q.message, out_path, caption=f"📦 {filename}")
+                finally:
+                    try:
+                        if out_path.exists():
+                            out_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+            return
+
+        return await q.message.reply_text("Command not configured.")
 
     async def manual_start(self, update: Update, _: ContextTypes.DEFAULT_TYPE):
         if not self._can(update.effective_user.id):

@@ -15,6 +15,7 @@ This project is designed for **self-hosted setups** (e.g. a Portainer-managed se
 * 🔒 **User access control**: Only whitelisted Telegram user IDs can use the bot.
 * ⚡ **Dockerized**: Runs fully inside a container, no Python setup required.
 * 🔄 **Config reload**: Update `config.json` and run `/reload` to refresh without restart.
+* 📦 **Backups & files**: Archive directories or run backup commands and receive files in chat.
 
 ---
 
@@ -79,6 +80,12 @@ Edit `config.json`:
     "disk":    { "title": "Disk",      "exec": "df -h" },
     "logs":    { "title": "Logs",      "exec": "journalctl -n 200 -u myservice" },
     "restart": { "title": "Restart",   "exec": "systemctl restart myservice" },
+    "backup":  { "title": "Backup data", "archive": "/var/lib/myapp/data" },
+    "backup_portainer": {
+      "title": "Backup Portainer",
+      "exec": "docker run --rm -v portainer_data:/data -v $PWD:/backup alpine sh -c 'tar -czf /backup/portainer_$(date +%F_%H%M).tgz -C / data'",
+      "artifact": "./portainer_*.tgz"
+    },
     "custom":  { "title": "✍️ Enter manually", "manual": true }
   }
 }
@@ -109,6 +116,39 @@ docker compose up -d --build
 * Tap a button → executes the mapped command via SSH.
 * `/manual` → enter any command manually.
 * `/reload` → reload `config.json` without restarting the bot.
+* Tap the "Backup data" button → bot will create `tar.gz` of the remote directory and send it as a file in chat.
+* Tap "Backup Portainer" → bot runs the `docker run` command, then automatically picks the newest `./portainer_*.tgz` and sends it.
+
+---
+
+## 📦 Backups and sending files
+
+Two ways to receive archives in Telegram:
+
+1) Archive a directory directly over SSH:
+
+```json
+{
+  "commands": {
+    "backup_dockers": { "title": "Backup Dockers", "archive": "/home/batyan/Dockers/" }
+  }
+}
+```
+
+2) Run any backup command that produces a file, then fetch it by glob:
+
+```json
+{
+  "commands": {
+    "backup_portainer": {
+      "title": "Backup Portainer",
+      "exec": "docker run --rm -v portainer_data:/data -v $PWD:/backup alpine sh -c 'tar -czf /backup/portainer_$(date +%F_%H%M).tgz -C / data'",
+      "artifact": "./portainer_*.tgz"
+    }
+  }
+}
+```
+* Tap "Backup Portainer" → bot runs the `docker run` command, then automatically picks the newest `./portainer_*.tgz` and sends it.
 
 ---
 

@@ -13,6 +13,10 @@ class CommandMeta:
     title: str
     exec: str | None = None
     manual: bool = False
+    # Optional: if set, bot will archive this remote directory and send it as a file
+    archive: str | None = None
+    # Optional: after exec finishes, fetch latest matching file (glob) and send
+    artifact: str | None = None
 
 
 @dataclass
@@ -34,6 +38,8 @@ def load_ui_config(path: str | Path) -> UIConfig:
                 title=v.get("title", k),
                 exec=v.get("exec"),
                 manual=bool(v.get("manual", False)),
+                archive=v.get("archive"),
+                artifact=v.get("artifact"),
             )
             for k, v in raw["commands"].items()
         }
