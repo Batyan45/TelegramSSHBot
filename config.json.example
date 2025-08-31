@@ -1,0 +1,33 @@
+{
+  "ui": {
+    "title": "Admin panel",
+    "rows": [
+      ["status", "disk"],
+      ["logs", "restart"],
+      ["temperature", "lastlog"],
+      ["custom"]
+    ]
+  },
+  "commands": {
+    "status": {
+      "title": "Status",
+      "exec": "uptime"
+    },
+    "disk": {
+      "title": "Disk",
+      "exec": "df -h"
+    },
+    "logs": {
+      "title": "Logs",
+      "exec": "journalctl -n 200 -u myservice"
+    },
+    "restart": {
+      "title": "Restart",
+      "exec": "systemctl --user status pipewire || true"
+    },
+    "custom": {
+      "title": "✍️ Manual command",
+      "manual": true
+    }
+  }
+}

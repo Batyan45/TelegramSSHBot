@@ -1,0 +1,22 @@
+name: tgbot-telegram-admin
+
+services:
+  tgbot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tgbot-telegram-admin
+    restart: unless-stopped
+    env_file:
+      - .env               # BOT_TOKEN, ALLOWED_USER_IDS, SSH_* and etc.
+    # CONFIG_PATH can be omitted — in the code there is a default /app/config.json
+    volumes:
+      - ./config.json:/app/config.json:ro
+    # Container logs don't grow
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # (optional) for a more graceful shutdown of the application
+    stop_signal: SIGINT

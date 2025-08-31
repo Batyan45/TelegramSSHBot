@@ -1,0 +1,6 @@
+.env
+.venv
+tgbot_key*
+config.json
+__pycache__/
+runtime/
