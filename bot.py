@@ -114,6 +114,15 @@ class BotApp:
         await update.message.reply_text("✍️ Type a command (or /cancel):")
         return WAITING_MANUAL
 
+    async def manual_button(self, update: Update, _: ContextTypes.DEFAULT_TYPE):
+        q = update.callback_query
+        await q.answer()
+        if not self._can(update.effective_user.id):
+            await q.edit_message_text("⛔️ Access denied.")
+            return ConversationHandler.END
+        await q.message.reply_text("✍️ Type a command (or /cancel):")
+        return WAITING_MANUAL
+
     async def manual_recv(self, update: Update, _: ContextTypes.DEFAULT_TYPE):
         if not self._can(update.effective_user.id):
             return await update.message.reply_text("⛔️ Access denied.")
@@ -136,14 +145,19 @@ class BotApp:
         app.add_handler(CommandHandler("start", self.start))
         app.add_handler(CommandHandler("help", self.help))
         app.add_handler(CommandHandler("reload", self.reload))
-        app.add_handler(CallbackQueryHandler(self.on_button))
-
+        
         conv = ConversationHandler(
-            entry_points=[CommandHandler("manual", self.manual_start)],
+            entry_points=[
+                CommandHandler("manual", self.manual_start),
+                CallbackQueryHandler(self.manual_button, pattern=r"^cmd:custom$")
+            ],
             states={WAITING_MANUAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.manual_recv)]},
             fallbacks=[CommandHandler("cancel", self.cancel)],
         )
         app.add_handler(conv)
+        
+        # Generic button handler after conversation so manual button is captured by conv
+        app.add_handler(CallbackQueryHandler(self.on_button))
         app.add_error_handler(self.errors)
         app.run_polling()
 
